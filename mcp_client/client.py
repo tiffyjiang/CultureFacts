@@ -41,3 +41,25 @@ class MCPClient:
     async def __aexit__(self, *exc) -> None:
         """Close the session and stop the server process."""
         await self._stack.aclose()
+
+    async def call_tool(self, name: str, **arguments: Any) -> Any:
+        """Call a server tool by name and return its result as plain Python data."""
+        if self.session is None:
+            raise RuntimeError("Not connected; use `async with MCPClient() as mcp`")
+
+        result = await self.session.call_tool(name, arguments=arguments)
+        text = "\n".join(c.text for c in result.content if getattr(c, "type", "") == "text")
+
+        if result.isError:
+            raise RuntimeError(f"Tool '{name}' failed: {text}")
+
+        # Prefer structured output; FastMCP wraps non-dict returns as {"result": ...}
+        data = result.structuredContent
+        if data is not None:
+            return data["result"] if set(data) == {"result"} else data
+
+        # Fallback: parse the text as JSON, else return it as-is
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return text

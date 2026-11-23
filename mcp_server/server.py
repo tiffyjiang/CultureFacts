@@ -25,6 +25,9 @@ LOG_FILE.parent.mkdir(exist_ok=True)
 # Server instance; tools are registered with @mcp.tool()
 mcp = FastMCP("culture-facts", log_level="WARNING")
 
+# In-memory message board for one pipeline run (server lives for one run)
+_messages: list[dict] = []
+
 # Helpers (not exposed as tools)
 def _safe_path(relative_path: str) -> Path:
     """Resolve a path inside WORKSPACE; reject anything outside it (guardrail)."""
@@ -32,6 +35,11 @@ def _safe_path(relative_path: str) -> Path:
     if not path.is_relative_to(WORKSPACE.resolve()):
         raise ValueError(f"Path '{relative_path}' is outside the workspace")
     return path
+
+def _log(entry: dict) -> None:
+    """Append one message to logs/messages.jsonl for the demo."""
+    with LOG_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 # File tools
@@ -67,6 +75,7 @@ def reset_workspace() -> str:
         if item.name == ".gitkeep":
             continue
         shutil.rmtree(item) if item.is_dir() else item.unlink()
+    _messages.clear()
     return "Workspace reset"
 
 # Test tool
@@ -96,6 +105,26 @@ def run_tests(test_path: str = "tests") -> dict:
         "output": output[-4000:],  # tail only, keeps responses small
     }
 
+# Messaging tools: how agents hand work to each other over MCP
+@mcp.tool()
+def send_message(sender: str, recipient: str, msg_type: str, content: str) -> dict:
+    """Post a message from one agent to another (format in docs/interfaces.md)."""
+    message = {
+        "id": len(_messages) + 1,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "sender": sender,
+        "recipient": recipient,
+        "type": msg_type,
+        "content": content,
+    }
+    _messages.append(message)
+    _log(message)
+    return message
+
+@mcp.tool()
+def read_messages(recipient: str) -> list[dict]:
+    """Return all messages addressed to an agent, oldest first."""
+    return [m for m in _messages if m["recipient"] == recipient]
 
 if __name__ == "__main__":
     mcp.run()  # stdio transport

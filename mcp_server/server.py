@@ -28,6 +28,7 @@ mcp = FastMCP("culture-facts", log_level="WARNING")
 # In-memory message board for one pipeline run (server lives for one run)
 _messages: list[dict] = []
 
+
 # Helpers (not exposed as tools)
 def _safe_path(relative_path: str) -> Path:
     """Resolve a path inside WORKSPACE; reject anything outside it (guardrail)."""
@@ -35,6 +36,7 @@ def _safe_path(relative_path: str) -> Path:
     if not path.is_relative_to(WORKSPACE.resolve()):
         raise ValueError(f"Path '{relative_path}' is outside the workspace")
     return path
+
 
 def _log(entry: dict) -> None:
     """Append one message to logs/messages.jsonl for the demo."""
@@ -70,13 +72,15 @@ def list_files() -> list[str]:
 
 @mcp.tool()
 def reset_workspace() -> str:
-    """Delete all generated files before a new run."""
+    """Delete generated files, clear messages and the log before a new run."""
     for item in WORKSPACE.iterdir():
         if item.name == ".gitkeep":
             continue
         shutil.rmtree(item) if item.is_dir() else item.unlink()
     _messages.clear()
+    LOG_FILE.write_text("", encoding="utf-8")
     return "Workspace reset"
+
 
 # Test tool
 @mcp.tool()
@@ -86,6 +90,7 @@ def run_tests(test_path: str = "tests") -> dict:
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(target), "-q", "--no-header", "-p", "no:cacheprovider"],
         cwd=WORKSPACE,
+        stdin=subprocess.DEVNULL,                           # don't inherit the MCP stdio pipe (Windows hang)
         capture_output=True,
         text=True,
         timeout=120,                                        # guardrail: no infinite loops
@@ -105,6 +110,7 @@ def run_tests(test_path: str = "tests") -> dict:
         "output": output[-4000:],  # tail only, keeps responses small
     }
 
+
 # Messaging tools: how agents hand work to each other over MCP
 @mcp.tool()
 def send_message(sender: str, recipient: str, msg_type: str, content: str) -> dict:
@@ -121,10 +127,16 @@ def send_message(sender: str, recipient: str, msg_type: str, content: str) -> di
     _log(message)
     return message
 
+
 @mcp.tool()
 def read_messages(recipient: str) -> list[dict]:
     """Return all messages addressed to an agent, oldest first."""
     return [m for m in _messages if m["recipient"] == recipient]
 
+
 if __name__ == "__main__":
+    # Started by a person (e.g. VS Code's Run button), not by the MCP client
+    if sys.stdin.isatty():
+        print("This is an MCP server; the client starts it. Run `python main.py` instead.")
+        sys.exit(0)
     mcp.run()  # stdio transport
